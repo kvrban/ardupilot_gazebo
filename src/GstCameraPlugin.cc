@@ -66,6 +66,7 @@ class GstCameraPlugin::Impl {
     bool useRtmpPipeline{false};
     std::string rtmpLocation;
     bool useBasicPipeline{false};
+    std::string videoCodec{"h264"};
     bool useCuda{false};
     std::string imageTopic;
     std::string enableTopic;
@@ -158,6 +159,12 @@ void GstCameraPlugin::Configure(
     else if (_sdf->HasElement("use_basic_pipeline"))
     {
         impl->useBasicPipeline = _sdf->Get<bool>("use_basic_pipeline");
+    }
+
+    // Video codec (h264 or h265)
+    if (_sdf->HasElement("video_codec"))
+    {
+        impl->videoCodec = _sdf->Get<std::string>("video_codec");
     }
 
     // Use CUDA for video encoding
@@ -409,8 +416,16 @@ void GstCameraPlugin::Impl::CreateGenericPipeline(GstElement *pipeline)
     gzdbg << "GstCameraPlugin: creating generic pipeline" << std::endl;
     GstElement *queue = gst_element_factory_make("queue", nullptr);
     GstElement *converter = gst_element_factory_make("videoconvert", nullptr);
-    GstElement *encoder = CreateEncoder();
-    GstElement *payloader = gst_element_factory_make("rtph264pay", nullptr);
+    GstElement* encoder = CreateEncoder();
+    GstElement* payloader{nullptr};
+    if (videoCodec == "h265")
+    {
+        payloader = gst_element_factory_make("rtph265pay", nullptr);
+    }
+    else
+    {
+        payloader = gst_element_factory_make("rtph264pay", nullptr);
+    }
     GstElement *sink = gst_element_factory_make("udpsink", nullptr);
 
     g_object_set(G_OBJECT(sink), "host", udpHost.c_str(),
@@ -442,8 +457,16 @@ void GstCameraPlugin::Impl::CreateMpeg2tsPipeline(GstElement *pipeline)
     gzdbg << "GstCameraPlugin: creating MPEG2TS pipeline" << std::endl;
     GstElement *queue = gst_element_factory_make("queue", nullptr);
     GstElement *converter = gst_element_factory_make("videoconvert", nullptr);
-    GstElement *encoder = CreateEncoder();
-    GstElement *h264_parser = gst_element_factory_make("h264parse", nullptr);
+    GstElement* encoder = CreateEncoder();
+    GstElement* parser{nullptr};
+    if (videoCodec == "h265")
+    {
+        parser = gst_element_factory_make("h265parse", nullptr);
+    }
+    else
+    {
+        parser = gst_element_factory_make("h264parse", nullptr);
+    }
     GstElement *payloader = gst_element_factory_make("mpegtsmux", nullptr);
     GstElement *queue_mpeg = gst_element_factory_make("queue", nullptr);
     GstElement *sink = gst_element_factory_make("udpsink", nullptr);
@@ -452,7 +475,7 @@ void GstCameraPlugin::Impl::CreateMpeg2tsPipeline(GstElement *pipeline)
     g_object_set(G_OBJECT(sink), "host", udpHost.c_str(), "port", udpPort,
         "sync", false, nullptr);
 
-    if (!source || !queue || !converter || !encoder || !h264_parser
+    if (!source || !queue || !converter || !encoder || !parser
         || !payloader || !queue_mpeg || !sink)
     {
         gzerr << "GstCameraPlugin: failed to create GStreamer elements"
@@ -461,9 +484,9 @@ void GstCameraPlugin::Impl::CreateMpeg2tsPipeline(GstElement *pipeline)
     }
 
     gst_bin_add_many(GST_BIN(pipeline), source, queue, converter, encoder,
-        h264_parser, payloader, queue_mpeg, sink, nullptr);
-    if (gst_element_link_many(source, queue, converter, encoder,
-        h264_parser, payloader, queue_mpeg, sink, nullptr) != TRUE)
+        parser, payloader, queue_mpeg, sink, nullptr);
+    if (gst_element_link_many(source, queue, converter, encoder, parser,
+        payloader, queue_mpeg, sink, nullptr) != TRUE)
     {
         gzerr << "GstCameraPlugin: failed to link GStreamer elements"
               << std::endl;
@@ -477,12 +500,26 @@ GstElement* GstCameraPlugin::Impl::CreateEncoder()
     if (useCuda)
     {
         gzdbg << "Using Cuda" << std::endl;
-        encoder = gst_element_factory_make("nvh264enc", nullptr);
+        if (videoCodec == "h265")
+        {
+            encoder = gst_element_factory_make("nvh265enc", nullptr);
+        }
+        else
+        {
+            encoder = gst_element_factory_make("nvh264enc", nullptr);
+        }
         g_object_set(G_OBJECT(encoder), "bitrate", 800, "preset", 1, nullptr);
     }
     else
     {
-        encoder = gst_element_factory_make("x264enc", nullptr);
+        if (videoCodec == "h265")
+        {
+            encoder = gst_element_factory_make("x265enc", nullptr);
+        }
+        else
+        {
+            encoder = gst_element_factory_make("x264enc", nullptr);
+        }
         g_object_set(G_OBJECT(encoder), "bitrate", 800, "speed-preset", 6,
             "tune", 4, "key-int-max", 10, nullptr);
     }
